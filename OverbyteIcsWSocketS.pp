@@ -58,7 +58,7 @@ Apr 02, 2000 V1.04 Added FSessionClosedFlag to avoid double SessionClosed
                    event triggering
 
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
-unit WSocketS;
+unit OverbyteIcsWSocketS;
 {$define fpc}
 {$mode delphi}
 

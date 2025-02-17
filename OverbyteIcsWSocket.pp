@@ -471,7 +471,7 @@ About multithreading and event-driven:
 
 
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
-unit WSocket;
+unit OverbyteIcsWSocket;
 {$define fpc}
 {$mode delphi}
 {$B-}           { Enable partial boolean evaluation   }
@@ -503,13 +503,14 @@ uses
   Windows, Classes, SysUtils,WSockBuf,// WinSock2,
   OverbyteIcsWinsock,
   OverbyteIcsWSockBuf,
+  OverbyteIcsWndControl,
   OverbyteIcsUtils,
   OverbyteIcsTypes
 {$IFNDEF NOFORMS} { See comments in history at 14/02/99 }
   Forms
 {$ENDIF}
   ;
-
+(*
 Type
     PMessage = ^TMessage;
     TMessage = packed record
@@ -525,7 +526,7 @@ Type
                            ResultLo: Word;
                            ResultHi: Word );
                end;
-
+*)
 const
   WSocketVersion            = 434;
   CopyRight    : String     = ' TWSocket FPC (c) 1996-2001 F. Piette V4.34 ';
@@ -550,10 +551,39 @@ const
 type
 
   TWndMethod         = procedure(var Message: TMessage) of object;
-  ESocketException   = class(Exception);
-  TBgExceptionEvent  = procedure (Sender : TObject;
-                                  E : Exception;
-                                  var CanClose : Boolean) of object;
+  //ESocketException   = class(Exception);
+  //TBgExceptionEvent  = procedure (Sender : TObject;
+                                  //E : Exception;
+                                  //var CanClose : Boolean) of object;
+  TBgExceptionEvent  = TIcsBgExceptionEvent; { V7.35 }
+
+  ESocketException   = class(Exception)  { V8.36 more detail }
+  private
+    FErrorMessage : string;
+    FIPStr        : String;
+    FPortStr      : String;
+    FProtoStr     : String;
+    FErrorCode    : Integer;
+    FFriendlyMsg  : String;
+    FFunc         : String;
+  public
+    constructor Create(const AMessage       : String;
+                       AErrorCode           : Integer = 0;
+                       const AErrorMessage  : String = '';
+                       const AFriendlyMsg   : String = '';
+                       const AFunc          : String = '';
+                       const AIP            : String = '';
+                       const APort          : String = '';
+                       const AProto         : String = '');
+    property IPStr        : String  read FIPStr;
+    property PortStr      : String  read FPortStr;
+    property ProtoStr     : String  read FProtoStr;
+    property ErrorCode    : Integer read FErrorCode;
+    property ErrorMessage : String  read FErrorMessage;
+    property FriendlyMsg  : String  read FFriendlyMsg;
+    property Func         : String  read FFunc;
+  end;
+
 { Move to OverbyteIcsTypes
   TSocketState       = (wsInvalidState,
                         wsOpened,     wsBound,
@@ -577,6 +607,7 @@ type
   TChangeState       = procedure (Sender: TObject;
                                  OldState, NewState : TSocketState) of object;
   TDebugDisplay      = procedure (Sender: TObject; var Msg : String) of object;
+  TIcsException      = procedure (Sender: TObject; SocExcept: ESocketException) of object; { V8.36 }
   TWSocketSyncNextProc = procedure of object;
 { TSocket type is defined for Delphi 1/2/3 but not for all others }
 {$IFNDEF VER80} { Delphi 1  }
@@ -598,7 +629,9 @@ type
     FSendFlags          : Integer;
     FLastError          : Integer;
     FWindowHandle       : HWND;
-    FDnsLookupBuffer    : array [0..MAXGETHOSTSTRUCT] of char;
+  {$IFDEF MSWINDOWS}
+    FDnsLookupBuffer    : array [0..MAXGETHOSTSTRUCT] of AnsiChar;
+  {$ENDIF}
     FDnsLookupHandle    : THandle;
     FDnsLookupCheckMsg  : Boolean;
     FDnsLookupTempMsg   : TMessage;
@@ -659,6 +692,10 @@ type
     FOnBgException      : TBgExceptionEvent;
     FOnDisplay          : TDebugDisplay;
     FOnMessagePump      : TNotifyEvent;
+    FSocketErrs         : TSocketErrs;   { V8.36 }
+    FonException        : TIcsException; { V8.36 }
+    FAddrResolvedStr    : String;        { V8.60 IPv4 or IPv6 address }
+    FPunycodeHost       : String;        { V8.64 Puncycode result of last DnsLookup  }
     procedure   WndProc(var MsgRec: TMessage); virtual;
     procedure   AllocateSocketHWnd; virtual;
     procedure   DeallocateSocketHWnd; virtual;
@@ -689,7 +726,15 @@ type
     procedure   SendText(Str : String);
     function    RealSend(var Data : TWSocketData; Len : Integer) : Integer; virtual;
     procedure   RaiseExceptionFmt(const Fmt : String; args : array of const); virtual;
-    procedure   RaiseException(const Msg : String); virtual;
+    procedure   RaiseException(const Msg : String); overload; virtual;
+    procedure   RaiseException(const Msg : String;
+                       AErrorCode           : Integer;   { V8.36 more }
+                       const AErrorMessage  : String = '';
+                       const AFriendlyMsg   : String = '';
+                       const AFunc          : String = '';
+                       const AIP            : String = '';
+                       const APort          : String = '';
+                       const AProto         : String = ''); overload; virtual;
     procedure   HandleBackGroundException(E: Exception); virtual;
     procedure   TriggerDisplay(Msg : String);
     procedure   TriggerSendData(BytesSent : Integer);
@@ -701,6 +746,7 @@ type
     procedure   TriggerChangeState(OldState, NewState : TSocketState); virtual;
     procedure   TriggerDNSLookupDone(Error : Word); virtual;
     procedure   TriggerError; virtual;
+    procedure   TriggerException (E: ESocketException); virtual;   { V8.36 }
     function    DoRecv(var Buffer : TWSocketData;
                        BufferSize : Integer;
                        Flags      : Integer) : Integer; virtual;
@@ -736,7 +782,7 @@ type
                        Data    : TWSocketData;
                        Len     : Integer) : integer; virtual;
     function    SendStr(Str : String) : Integer; virtual;
-    procedure   DnsLookup(HostName : String); virtual;
+    procedure   DnsLookup(const AHostName : String); virtual;
     procedure   ReverseDnsLookup(HostAddr: String); virtual;
     procedure   CancelDnsLookup; virtual;
     function    GetPeerAddr: string; virtual;
@@ -769,6 +815,8 @@ type
     property    OnMessagePump      : TNotifyEvent   read  FOnMessagePump
                                                     write FOnMessagePump;
 {$ENDIF}
+    property    AddrResolvedStr : String            read FAddrResolvedStr;    { V8.60 IPv4 or IPv6 address }
+    property    PunycodeHost : String               read FPunycodeHost;       { V8.64 Puncycode result of last DnsLookup }
   protected
     property PortNum : Integer                      read  FPortNum;
     property Handle : HWND                          read  FWindowHandle;
@@ -828,6 +876,10 @@ type
                                                     write FOnDnsLookupDone;
     property OnError            : TNotifyEvent      read  FOnError
                                                     write FOnError;
+    property SocketErrs         : TSocketErrs       read  FSocketErrs
+                                                    write FSocketErrs;   { V8.36 }
+    property onException        : TicsException     read  FonException
+                                                    write FonException;  { V8.36 }
     property OnBgException      : TBgExceptionEvent read  FOnBgException
                                                     write FOnBgException;
 
@@ -1027,6 +1079,8 @@ type
     property OnDnsLookupDone;
     property OnError;
     property OnBgException;
+    property SocketErrs;
+    property onException;
     property FlushTimeout;
     property SendFlags;
     property LingerOnOff;
@@ -1045,6 +1099,10 @@ type
   end;
 
 procedure Register;
+
+function  HasOption(OptSet : TWSocketOptions; Opt : TWSocketOption) : Boolean;
+function  RemoveOption(OptSet : TWSocketOptions; Opt : TWSocketOption) : TWSocketOptions;
+function  AddOptions(Opts: array of TWSocketOption): TWSocketOptions;
 
 function  WinsockInfo : TWSADATA;
 (* V9.3 moved to OverbyteIcsTypes
@@ -1255,7 +1313,8 @@ function WSocket_WSAAsyncGetHostByName(HWindow: HWND; wMsg: u_int;
                                       name, buf: PAnsiChar;
                                       buflen: Integer): THandle; overload;    { V8.70 }
 function WSocket_WSAAsyncGetHostByName(HWindow: HWND; wMsg: u_int;
-                                      name, buf: UnicodeString;
+                                      name: UnicodeString;
+                                      var buf: UnicodeString;
                                       buflen: Integer): THandle; overload;    { V8.70 }
 function WSocket_WSAAsyncGetHostByAddr(HWindow: HWND;
                                       wMsg: u_int; addr: PAnsiChar;
@@ -1265,7 +1324,7 @@ function WSocket_WSAAsyncGetHostByAddr(HWindow: HWND;
 function WSocket_WSAAsyncGetHostByAddr(HWindow: HWND;
                                       wMsg: u_int; addr: UnicodeString;
                                       len, Struct: Integer;
-                                      buf: UnicodeString;
+                                      var buf: UnicodeString;
                                       buflen: Integer): THandle; overload;    { V8.70 }
 function WSocket_WSAAsyncSelect(s: TSocket; HWindow: HWND; wMsg: u_int; lEvent: Integer): Integer;
 
@@ -1523,6 +1582,69 @@ begin
     Result := TrimLeft(TrimRight(Str));
 end;
 {$ENDIF}
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+{ V8.36 extended exception handler }
+constructor ESocketException.Create(
+                       const AMessage       : String;
+                       AErrorCode           : Integer = 0;
+                       const AErrorMessage  : String = '';
+                       const AFriendlyMsg   : String = '';
+                       const AFunc          : String = '';
+                       const AIP            : String = '';
+                       const APort          : String = '';
+                       const AProto         : String = '');
+begin
+    FErrorCode    := AErrorCode;
+    FErrorMessage := AErrorMessage;
+    FIPStr        := AIP;
+    FPortStr      := APort;
+    FProtoStr     := AProto;
+    FFriendlyMsg  := AFriendlyMsg;
+    FFunc         := AFunc;
+    if (FErrorCode > 0) and (FErrorMessage = '') then
+                    FErrorMessage := WSocketErrorDesc(FErrorCode);   { V8.42 }
+    if FFriendlyMsg = '' then FFriendlyMsg := AMessage;
+    inherited Create(AMessage);
+end;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+{ V8.36 extended exception information, set FSocketErrs = wsErrFriendly for
+  more friendly messages (without error numbers) }
+procedure TCustomWSocket.RaiseException(const Msg : String;
+                       AErrorCode           : Integer;
+                       const AErrorMessage  : String = '';
+                       const AFriendlyMsg   : String = '';
+                       const AFunc          : String = '';
+                       const AIP            : String = '';
+                       const APort          : String = '';
+                       const AProto         : String = '');
+var
+    MyException: ESocketException;
+    MyMessage: String;
+begin
+    if Assigned(FOnError) then
+        TriggerError                 { Should be modified to pass Msg ! }
+    else begin
+        MyMessage := Msg ;
+        if (FSocketErrs = wsErrFriendly) and (AFriendlyMsg <> '') then
+                                                    MyMessage := AFriendlyMsg;
+        MyException := ESocketException.Create(MyMessage, AErrorCode, AErrorMessage,
+                                               AFriendlyMsg, AFunc, AIP, APort, AProto);
+        if Assigned (FonException) then
+        begin
+            TriggerException (MyException) ;       { V8.36 }
+        end
+        else
+        begin
+            TriggerException (MyException) ;       { V8.37 }
+            raise MyException;
+        end;
+        if Assigned (MyException) then MyException.Free;  { V8.37 }
+    end;
+end;
 
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
@@ -2366,7 +2488,8 @@ end;
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 function WSocket_WSAAsyncGetHostByName(HWindow: HWND; wMsg: u_int;
-                                      name, buf: UnicodeString;
+                                      name: UnicodeString;
+                                      var buf: UnicodeString;
                                       buflen: Integer): THandle;              { V8.70 }
 begin
     Result := WSocket_WSAAsyncGetHostByName(HWindow, wMsg,
@@ -2400,11 +2523,17 @@ end;
 function WSocket_WSAAsyncGetHostByAddr(HWindow: HWND;
                                       wMsg: u_int; addr: UnicodeString;
                                       len, Struct: Integer;
-                                      buf: UnicodeString;
+                                      var buf: UnicodeString;
                                       buflen: Integer): THandle;              { V8.70 }
+var
+  addrA: AnsiString;
+  bufA: AnsiString;
 begin
+  addrA := addr;
+  bufA := buf;
     Result := WSocket_WSAAsyncGetHostByAddr(HWindow, wMsg,
-        PAnsiChar(AnsiString(addr)), len, Struct, PAnsiChar(AnsiString(buf)), buflen);
+        PAnsiChar(AnsiString(addrA)), len, Struct, PAnsiChar(AnsiString(bufA)), buflen);
+  buf := bufA;
 end;
 
 
@@ -2703,12 +2832,15 @@ end;
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 function WSocket_inet_addr(cp: PChar): u_long;
+var
+  s: AnsiString;
 begin
     {$IFNDEF NO_ADV_MT}
         SafeIncrementCount;
         try
     {$ENDIF}
-            Result := WSocket_Synchronized_inet_addr(PAnsiChar(cp));
+            s := cp;
+            Result := WSocket_Synchronized_inet_addr(s);
     {$IFNDEF NO_ADV_MT}
         finally
             SafeDecrementCount;
@@ -3045,6 +3177,7 @@ end;
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 procedure TCustomWSocket.AssignDefaultValue;
 begin
+    FSocketFamily := sfIPv4;
     //FillChar(sin, 0, Sizeof(sin));
     InitializeAddr(sin, FSocketFamily);
     //FAddrFormat         := sin.sin6_family;
@@ -3082,6 +3215,7 @@ begin
     FReadCount         := 0;
     FCloseInvoked      := FALSE;
     FFlushTimeout      := 60;
+    FPunycodeHost       := '';       { V8.64 }
 end;
 
 
@@ -3822,6 +3956,36 @@ end;
 
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+function HasOption(
+    OptSet : TWSocketOptions;
+    Opt    : TWSocketOption): Boolean;
+begin
+    Result := Opt in OptSet;
+end;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+function AddOptions(Opts: array of TWSocketOption): TWSocketOptions;
+var
+    I : Integer;
+begin
+    Result := [];
+    for I := Low(Opts) to High(Opts) do
+        //Result := Result + [Opts[I]];  { Anton Sviridov }
+        Include(Result, Opts[I]);
+end;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+function  RemoveOption(
+    OptSet : TWSocketOptions;
+    Opt    : TWSocketOption) : TWSocketOptions;
+begin
+    Result := OptSet - [Opt];
+end;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 procedure TCustomWSocket.ASyncReceive(
     Error           : Word;
     MySocketOptions : TWSocketOptions);
@@ -3960,26 +4124,41 @@ end;
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 procedure GetIPList(phe  : PHostEnt; ToList : TStrings);
 type
-    TaPInAddr = array [0..255] of PInAddr;
+    TaPInAddr = array of PInAddr;
+    //TaPInAddr = array [0..255] of PInAddr;
     PaPInAddr = ^TaPInAddr;
 var
-    pptr : PaPInAddr;
-    I    : Integer;
+  p0: Pointer;
+  p: PInAddr;
+  pptr : PaPInAddr;
+  I    : UInt32;
+  len: Integer;
+  a: PChar;
 begin
-    pptr := PaPInAddr(Phe^.h_addr_list);
-
-    I := 0;
-    while pptr^[I] <> nil do begin
-        ToList.Add(StrPas(WSocket_inet_ntoa(pptr^[I]^)));
-        Inc(I);
+  p0 := @(Phe^.h_addr_list);
+  len := Phe^.h_length;
+ {$IFDEF WIN64}
+ //!!!!!!!!!!!!!!! Wrong Aligment
+  i := Lo(QWORD(p0^));
+  if i = $BAADF00D then
+    Inc(p0, 4);
+ {$ENDIF WIN64}
+  pptr := PaPInAddr(p0);
+  I := 0;
+  while pptr^[I] <> nil do begin
+      p := pptr^[I];
+      a := WSocket_inet_ntoa(p^);
+      ToList.Add(StrPas(a));
+      Inc(I);
     end;
+
 end;
 
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 procedure TCustomWSocket.WMAsyncGetHostByName(var msg: TMessage);
 var
-    Phe     : Phostent;
+    Phe     : PHostEnt;
     Error   : Word;
 begin
     if FDnsLookupHandle = 0 then begin
@@ -3995,11 +4174,24 @@ begin
     FDnsLookupHandle := 0;
     Error := Msg.LParamHi;
     if Error = 0 then begin
+    {$IFDEF MSWINDOWS}
+      //if (FSocketFamily = sfIPv4) and (not HasOption(FComponentOptions, wsoIcsDnsLookup)) then
+      begin  { V8.43, V8.70 }
         Phe := PHostent(@FDnsLookupBuffer);
         if phe <> nil then begin
-            GetIpList(Phe, FDnsResultList);
+            if phe.h_addrtype = AF_INET then
+              GetIpList(Phe, FDnsResultList);
             FDnsResult := FDnsResultList.Strings[0];
         end;
+      //end
+      //else begin
+    {$ENDIF}
+       //FDnsResultList.Assign(TIcsAsyncDnsLookupRequest(msg.WParam).ResultList);
+       //if FDnsResultList.Count > 0 then
+         //FDnsResult := FDnsResultList[0];
+    {$IFDEF MSWINDOWS}
+      end;
+    {$ENDIF}
     end;
     TriggerDnsLookupDone(Error);
 end;
@@ -4362,34 +4554,64 @@ end;
 
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
-procedure TCustomWSocket.DnsLookup(HostName : String);
+procedure TCustomWSocket.DnsLookup(const AHostName : String);
 var
-    IPAddr  : TInAddr;
+    IPAddr   : TInAddr;
+    Err      : integer;
+    ErrFlag  : Boolean;   { V8.64 }
 begin
-    if HostName = '' then begin
-        RaiseException('DNS lookup: invalid host name.');
-        TriggerDnsLookupDone(WSAEINVAL);
-        Exit;
+    if AHostName = '' then begin
+      try
+          RaiseException('DNS lookup: invalid host name.');
+      finally   { V8.36 }
+          TriggerDnsLookupDone(WSAEINVAL);
+      end;
+      Exit;
     end;
 
     { Cancel any pending lookup }
     if FDnsLookupHandle <> 0 then begin
-        WSocket_WSACancelAsyncRequest(FDnsLookupHandle);
+      //WSocket_WSACancelAsyncRequest(FDnsLookupHandle);
+        WSocket_Synchronized_WSACancelAsyncRequest(FDnsLookupHandle);
         FDnsLookupHandle := 0;
     end;
 
     FDnsResult := '';
     FDnsResultList.Clear;
 
+    { V8.64 convert Unicode International Domain Name into Punycode ASCII }
+      if HasOption(FComponentOptions, wsoIgnoreIDNA) then                        { V8.70 }
+          FPunycodeHost := IcsTrim(AHostName)  // convert to ANSI, backward compatible
+      else begin
+          FPunycodeHost := IcsIDNAToASCII(IcsTrim(AHostName), HasOption(FComponentOptions, wsoUseSTD3AsciiRules), ErrFlag);   { V8.70 }
+          if ErrFlag then begin
+              FPunycodeHost := '';
+           // don't raise exception since previously this would be a host not found error
+           //   RaiseException(String(AHostName) + ': can''t start DNS lookup - invalid host name');
+              TriggerDnsLookupDone(WSAEINVAL);
+              Exit;
+          end;
+      end;
+
 {$IFDEF VER80}
     { Delphi 1 do not automatically add a terminating nul char }
     HostName := HostName + #0;
 {$ENDIF}
-    IPAddr.S_addr := WSocket_inet_addr(@HostName[1]);
-    if IPAddr.S_addr <> u_long(INADDR_NONE) then begin
-        FDnsResult := StrPas(WSocket_inet_ntoa(IPAddr));
-        TriggerDnsLookupDone(0);
-        Exit;
+    if //(FSocketFamily <> sfIPv6) and
+       WSocketIsDottedIP(FPunycodeHost) then begin                              { V8.70 }
+        IPAddr.S_addr := WSocket_Synchronized_inet_addr(FPunycodeHost);          { V8.70 }
+        if IPAddr.S_addr <> u_long(INADDR_NONE) then begin
+            FDnsResult := String(WSocket_Synchronized_inet_ntoa(IPAddr));
+            FDnsResultList.Add(FDnsResult);     { 28/09/2002 }{ 12/02/2003 }
+            TriggerDnsLookupDone(0);
+            Exit;
+        end;
+    end;
+
+    if FWindowHandle = 0 then begin
+        RaiseException('DnsLookup: Window not assigned');
+        TriggerDnsLookupDone(WSAEINVAL);  { V8.64 }
+        Exit;   { V8.36 }
     end;
 
     { John Goodwin found a case where winsock dispatch WM_ASYNCGETHOSTBYNAME }
@@ -4397,17 +4619,18 @@ begin
     { that, FDnsLookupHandle is not yet assigned when execution comes in     }
     { WMAsyncGetHostByName. John use a flag to check this situation.         }
     FDnsLookupCheckMsg := FALSE;
-    FDnsLookupHandle   := WSocket_WSAAsyncGetHostByName(
+    FDnsLookupHandle   := WSocket_Synchronized_WSAAsyncGetHostByName(
                               FWindowHandle,
                               WM_ASYNCGETHOSTBYNAME,
-                              @HostName[1],
+                              PAnsiChar(AnsiString(FPunycodeHost)),   { V8.64 }
                               @FDnsLookupBuffer,
                               SizeOf(FDnsLookupBuffer));
     if FDnsLookupHandle = 0 then begin
-        RaiseExceptionFmt(
-                  '%s: can''t start DNS lookup, error #%d',
-                  [HostName, WSocket_WSAGetLastError]);
-        Exit;
+        Err := WSocket_Synchronized_WSAGetLastError;
+        RaiseException(FPunycodeHost + ': can''t start DNS lookup - ' +
+                                                GetWinsockErr(Err), Err);  { V5.26, V8.36 }
+        TriggerDnsLookupDone(WSAEINVAL);   { V8.64 }
+      Exit;
     end;
     if FDnsLookupCheckMsg then begin
         FDnsLookupCheckMsg := FALSE;
@@ -5316,6 +5539,14 @@ procedure TCustomWSocket.TriggerError;
 begin
     if Assigned(FOnError) then
         FOnError(Self);
+end;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+procedure TCustomWSocket.TriggerException (E: ESocketException);   { V8.36 }
+begin
+    if Assigned(FOnException) then
+        FOnException(Self, E);
 end;
 
 

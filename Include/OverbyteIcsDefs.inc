@@ -357,7 +357,7 @@ separate compiled DCUs for Delphi 5 to 12.
 {$DEFINE BUILTIN_THROTTLE}
 
 { Next symbol removes a lot of debug logging code, to save space }
-{.$DEFINE NO_DEBUG_LOG}
+{$DEFINE NO_DEBUG_LOG}
 
 { Next symbol enables automatic SSL/TLS ordering in SocketServer and other servers }
 { Unfortunately this adds a lot of other units, HTTPS REST, Json, OAuth2, etc      }
