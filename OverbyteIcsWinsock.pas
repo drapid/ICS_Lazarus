@@ -1515,6 +1515,7 @@ const
 
 *)
 
+{ V9.3 moved most declarations to OverbyteIcsTypes }
 
 {$EXTERNALSYM IN6ADDR_ANY_INIT}
 function  IN6ADDR_ANY_INIT: TIn6Addr; {$IFDEF USE_INLINE}inline;{$ENDIF}
@@ -1710,6 +1711,7 @@ procedure FreeAddrInfoA(ai: PADDRINFOA); stdcall;
 {$EXTERNALSYM FreeAddrInfoA}
 procedure FreeAddrInfoW(ai: PADDRINFOW); stdcall;
 {$EXTERNALSYM FreeAddrInfoW}
+
 {$IFDEF UNICODE}
 procedure FreeAddrInfo(ai: PADDRINFOW); stdcall;
 {$ELSE}
@@ -1723,6 +1725,7 @@ function GetNameInfoA(addr: PSockAddr; namelen: Integer; host: PAnsiChar;
 function GetNameInfoW(addr: PSockAddr; namelen: Integer; host: PWideChar;
    hostlen: DWORD; serv: PWideChar; servlen: DWORD; flags: Integer): Integer; stdcall;
 {$EXTERNALSYM GetNameInfoW}
+
 {$IFDEF UNICODE}
 function GetNameInfo(addr: PSockAddr; namelen: Integer; host: PWideChar;
    hostlen: DWORD; serv: PWideChar; servlen: DWORD; flags: Integer): Integer; stdcall;
@@ -1821,15 +1824,6 @@ function Ics_GetNameInfo(addr: PSockAddr; namelen: Integer; host: PChar;
 
 type
   ESocketAPIException = class(Exception);
-
-(* V9.3 moved to Types
-var
-  WSocketGCount   : Integer = 0;
-  GWSockCritSect  : TRTLCriticalSection;
-  GReqVerLow      : BYTE    = 2;
-  GReqVerHigh     : BYTE    = 2;
-  GIPv6Available  : Integer = -1; { -1 = unchecked, 0 = FALSE, 1 = TRUE }
-*)
 
 procedure ForceLoadWinsock;
 procedure CancelForceLoadWinsock;
@@ -1947,6 +1941,8 @@ type
                                        namelen: Integer): Integer; stdcall;
     TAccept                = function (s: TSocket; addr: PSockAddr;
                                        addrlen: PInteger): TSocket; stdcall;
+    TWSAAccept             = function (s: TSocket; addr: PSockAddr; addrlen: PInteger; lpfnCondition: Pointer;
+                                                                             dwCallbackData: Pointer): TSocket; stdcall;   { V9.5 }
     TGetAddrInfoA          = function(NodeName: PAnsiChar; ServName: PAnsiChar;
                                       Hints: PAddrInfoA;
                                       var Addrinfo: PAddrInfoA): Integer; stdcall;
@@ -2000,6 +1996,7 @@ var
    FCloseSocket           : TCloseSocket = nil;
    FBind                  : TBind = nil;
    FAccept                : TAccept = nil;
+   FWSAAccept             : TWSAAccept = nil;          { V9.5 }
    FGetAddrInfoA          : TGetAddrInfoA = nil;
    FGetAddrInfoW          : TGetAddrInfoW = nil;
    FFreeAddrInfoA         : TFreeAddrInfoA = nil;
@@ -3165,6 +3162,15 @@ end;
 
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+function Ics_WSAAccept(s: TSocket; addr: PSockAddr; addrlen: PInteger; lpfnCondition: Pointer; dwCallbackData: Pointer): TSocket; { V9.5 }
+begin
+    if @FWSAAccept = nil then
+        @FWSAAccept := GetProc2('WSAAccept');
+    Result := FWSAAccept(s, addr, addrlen, lpfnCondition, dwCallbackData);
+end;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 function Ics_recv(s: TSocket; var Buf;
   len, flags: Integer): Integer;
 begin
@@ -3564,6 +3570,8 @@ begin
         Result := False;
 end;
 
+{$ENDIF MSWINDOWS}   { V9.4 }
+
 
 { Microsoft-specific IPv4 definitions. }
 {$IFDEF STILL_NEEDS_CHECK}
@@ -3804,6 +3812,7 @@ end;
 {$ENDIF}
 
 initialization
+{$IFDEF MSWINDOWS}     { V9.4 }
     InitializeCriticalSection(GWSockCritSect);
     in6addr_any := IN6ADDR_ANY_INIT;
     in6addr_loopback := IN6ADDR_LOOPBACK_INIT;

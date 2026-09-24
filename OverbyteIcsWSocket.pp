@@ -1,4 +1,4 @@
-{*_* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
 
 Author:       François PIETTE
 Description:  TWSocket class encapsulate the Windows Socket paradigm
@@ -500,7 +500,8 @@ unit OverbyteIcsWSocket;
 interface
 
 uses
-  Windows, Classes, SysUtils,WSockBuf,// WinSock2,
+  {$IFDEF RTL_NAMESPACES}Winapi.Windows{$ELSE}Windows{$ENDIF},
+  Classes, SysUtils, WSockBuf,// WinSock2,
   OverbyteIcsWinsock,
   OverbyteIcsWSockBuf,
   OverbyteIcsWndControl,
@@ -529,7 +530,7 @@ Type
 *)
 const
   WSocketVersion            = 434;
-  CopyRight    : String     = ' TWSocket FPC (c) 1996-2001 F. Piette V4.34 ';
+  CopyRight    : String     = ' TWSocket (c) 1996-2025 Francois Piette V9.5 ';
   WM_ASYNCSELECT            = WM_USER + 1;
   WM_ASYNCGETHOSTBYNAME     = WM_USER + 2;
   WM_ASYNCGETHOSTBYADDR     = WM_USER + 3;
@@ -609,14 +610,6 @@ type
   TDebugDisplay      = procedure (Sender: TObject; var Msg : String) of object;
   TIcsException      = procedure (Sender: TObject; SocExcept: ESocketException) of object; { V8.36 }
   TWSocketSyncNextProc = procedure of object;
-{ TSocket type is defined for Delphi 1/2/3 but not for all others }
-{$IFNDEF VER80} { Delphi 1  }
-{$IFNDEF VER90} { Delphi 2  }
-{$IFNDEF VER100} { Delphi 3 }
-  TSocket = u_int;
-{$ENDIF}
-{$ENDIF}
-{$ENDIF}
 
   TCustomWSocket = class(TComponent)
   private
@@ -800,7 +793,11 @@ type
     procedure   Pause; virtual;
     procedure   Resume; virtual;
     procedure   PutDataInSendBuffer(Data : Pointer; Len : Integer);
-    procedure   PutStringInSendBuffer(Str : String);
+    function    PutStringInSendBuffer(const Str : RawByteString): Integer; {$IFDEF COMPILER12_UP} overload; {$ENDIF}
+{$IFDEF COMPILER12_UP}
+    function    PutStringInSendBuffer(const Str : UnicodeString; ACodePage: Cardinal): Integer; overload;
+    function    PutStringInSendBuffer(const Str : UnicodeString): Integer; overload;
+{$ENDIF}
     procedure   DeleteBufferedData;
     procedure   ThreadAttach;
     procedure   MessagePump; virtual;
@@ -1008,13 +1005,18 @@ type
     public
         constructor Create(AOwner: TComponent); override;
         destructor  Destroy; override;
+        function    SendLine(const Str : RawByteString) : Integer; {$IFDEF COMPILER12_UP} overload; {$ENDIF} virtual;
+  {$IFDEF COMPILER12_UP}
+        function    SendLine(const Str : UnicodeString; ACodePage: Cardinal) : Integer; overload; virtual;
+        function    SendLine(const Str : UnicodeString) : Integer; overload; virtual;
+  {$ENDIF}
         property    LineLength : Integer     read  FLineLength;
     published
         property LineMode : Boolean          read  FLineMode
                                              write SetLineMode;
         property LineLimit : LongInt         read  FLineLimit
                                              write FLineLimit;
-        property LineEnd  : String           read  FLineEnd
+        property LineEnd  : AnsiString       read  FLineEnd
                                              write FLineEnd;
         property LineEcho : Boolean          read  FLineEcho
                                              write FLineEcho;
@@ -3288,7 +3290,7 @@ function XSocketWindowProc(
     ahWnd   : HWND;
     auMsg   : Integer;
     awParam : WPARAM;
-    alParam : LPARAM): Integer; stdcall;
+    alParam : LPARAM): LRESULT; stdcall;
 var
     Obj    : TObject;
     MsgRec : TMessage;
@@ -3598,11 +3600,11 @@ end;
 function TCustomWSocket.GetRcvdCount: u_long;//steven fix  LongInt;
 begin
     if csDesigning in ComponentState then begin
-        Result := -1;
+        Result := u_long(-1);
         Exit;
     end;
     if WSocket_ioctlsocket(FHSocket, FIONREAD, Result) = SOCKET_ERROR then begin
-        Result := -1;
+        Result := u_long(-1);
         SocketError('ioctlSocket');
         Exit;
     end;
@@ -3853,10 +3855,28 @@ end;
 
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
-procedure TCustomWSocket.PutStringInSendBuffer(Str : String);
+function TCustomWSocket.PutStringInSendBuffer(const Str : RawByteString): Integer;
 begin
-    PutDataInSendBuffer(@Str[1], Length(Str));
+    Result := Length(Str);
+    if Result > 0 then
+        PutDataInSendBuffer(Pointer(Str), Result);
 end;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+{$IFDEF COMPILER12_UP}
+function TCustomWSocket.PutStringInSendBuffer(const Str : UnicodeString; ACodePage : Cardinal): Integer;
+begin
+    Result := PutStringInSendBuffer(UnicodeToAnsi(Str, ACodePage));  // Explicit cast
+end;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+function TCustomWSocket.PutStringInSendBuffer(const Str : UnicodeString): Integer;
+begin
+    Result := PutStringInSendBuffer(AnsiString(Str));  // Explicit cast
+end;
+{$ENDIF}
 
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
@@ -3946,7 +3966,6 @@ begin
     else
         Result := 0;
 end;
-
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 procedure TCustomWSocket.SendText(Str : String);
@@ -6331,6 +6350,21 @@ begin
     inherited Destroy;
 end;
 
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+{ Returns -1 on error only if event OnError is assigned, otherwise an       }
+{ ESocketException may be raised. Returns the number of bytes written on    }
+{ success.                                                                  }
+function TCustomLineWSocket.SendLine(const Str : RawByteString) : Integer;
+begin
+    Result := PutStringInSendBuffer(Str);
+    if Result > 0 then begin
+        if SendStr(LineEnd) > -1 then
+            Inc(Result, Length(LineEnd))
+        else
+            Result := -1;
+    end;
+end;
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 procedure TCustomLineWSocket.WndProc(var MsgRec: TMessage);

@@ -219,6 +219,9 @@ type
 { following moved from OverbyteIcsWinsock }
 { * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 
+type
+    TSocketFamily = (sfAny, sfAnyIPv4, sfAnyIPv6, sfIPv4, sfIPv6);
+
 var
   WSocketGCount   : Integer = 0;
   GReqVerLow      : BYTE    = 2;
@@ -226,6 +229,7 @@ var
   GIPv6Available  : Integer = -1; { -1 = unchecked, 0 = FALSE, 1 = TRUE }
 {$IFDEF MSWINDOWS}
   GWSockCritSect  : TRTLCriticalSection;
+  {$EXTERNALSYM GWSockCritSect}                               { V9.4 }
 {$ENDIF MSWINDOWS}
 
 {$IFDEF MSWINDOWS}
@@ -498,6 +502,7 @@ type
       0: (S_un_b: SunB);
       1: (S_un_w: SunW);
       2: (S_addr: u_long);
+      3: (S_byte: array[0..3] of Byte);  { V9.5 }
   end;
   {$EXTERNALSYM in_addr}
   TInAddr = in_addr;
@@ -550,6 +555,57 @@ type
   end;
   {$EXTERNALSYM WSAData}
   TWSAData = WSAData;
+
+{ V9.5 WinSock 2 extension -- WSABUF and QOS struct, include qos.h }
+{ to pull in FLOWSPEC and related definitions }
+
+  {$EXTERNALSYM WSABUF}
+  WSABUF = record
+    len: u_long;    { the length of the buffer }
+    buf: PAnsiChar; { the pointer to the buffer }
+  end;
+  {$NODEFINE TWSABuf}
+  TWSABuf = WSABUF;
+  {$NODEFINE PWSABuf}
+  PWSABuf = ^TWSABuf;
+  {$EXTERNALSYM LPWSABUF}
+  LPWSABUF = PWSABUF;
+
+  {$EXTERNALSYM SERVICETYPE}
+  SERVICETYPE = LongInt;
+  {$NODEFINE TServiceType}
+  TServiceType = SERVICETYPE;
+
+  {$EXTERNALSYM FLOWSPEC}
+  FLOWSPEC = record
+    TokenRate,               // In Bytes/sec
+    TokenBucketSize,         // In Bytes
+    PeakBandwidth,           // In Bytes/sec
+    Latency,                 // In microseconds
+    DelayVariation : LongInt;// In microseconds
+    ServiceType : TServiceType;
+    MaxSduSize, MinimumPolicedSize : LongInt;// In Bytes
+  end;
+  {$NODEFINE TFlowSpec}
+  TFlowSpec = FLOWSPEC;
+  {$EXTERNALSYM PFLOWSPEC}
+  PFLOWSPEC = ^TFlowSpec;
+  {$EXTERNALSYM LPFLOWSPEC}
+  LPFLOWSPEC = PFLOWSPEC;
+
+  {$EXTERNALSYM QOS}
+  QOS = record
+    SendingFlowspec: TFlowSpec; { the flow spec for data sending }
+    ReceivingFlowspec: TFlowSpec; { the flow spec for data receiving }
+    ProviderSpecific: TWSABuf; { additional provider specific stuff }
+  end;
+  {$NODEFINE TQualityOfService}
+  TQualityOfService = QOS;
+  {$NODEFINE PQOS}
+  PQOS = ^QOS;
+  {$EXTERNALSYM LPQOS}
+  LPQOS = PQOS;
+
 
   PTransmitFileBuffers = ^TTransmitFileBuffers;
   _TRANSMIT_FILE_BUFFERS = record
@@ -1242,6 +1298,11 @@ const
   WSA_INFINITE                  = (INFINITE);
   {$EXTERNALSYM WSA_INFINITE}
 
+{ V9.5 response from WSAAccept conditional filtering callback to accept or reject connecton, renamed to avoid C conflicts }
+  Ics_CF_ACCEPT = 0;
+  Ics_CF_REJECT = 1;
+  Ics_CF_DEFER  = 2;      // don't use, as it will call back with same parameters (most likely right away)   }
+
 type
   PInAddr6 = ^in_addr6;
   in_addr6 = record
@@ -1277,6 +1338,43 @@ type
     ipv6mr_multiaddr: TInAddr6; // IPv6 multicast address.
     ipv6mr_interface: u_long;   // Interface index.
   end;
+
+  Socket_Address = record          { V9.5 used to store an IPv4 or IPv6 address }
+    Sockaddr: PSockAddrIn6;
+    SockaddrLength: Integer;      { 16 for IPv4, 28 for IPv6 }
+  end;
+  TSocketAddress = Socket_Address;
+
+  CSADDR_INFO = record             { V9.5 used to connection IP information }
+    LocalAddr: TSocketAddress;     { family, address and port  }
+    RemoteAddr: TSocketAddress;
+    iSocketType: Integer;          { SOCK_STREAM or SOCK_DGRAM }
+    iProtocol: Integer;            { IPPROTO_TCP or IPPROTO_UDP }
+    Buffer: array[0..63] of Byte;  { space for two PSockAddrIn6 records, max 56 }
+ end;
+ TCSAddrInfo = CSADDR_INFO;
+
+ TIcsSessIpInfo = record           { V9.5 used for WSocket SessionIpInfo property }
+    SocLocalAddr: TSockAddrIn6;    { family, address and port  }
+    SocRemoteAddr: TSockAddrIn6;
+    SocFamily: TSocketFamily;
+    LocalAddr: String;             { string versions of Soc values }
+    LocalPort: String;
+    RemoteAddr: String;
+    RemotePort: String;
+    StartTick: Int64;              { when session started }
+    SocType: Integer;              { SOCK_STREAM or SOCK_DGRAM }
+    Proto: Integer;                { IPPROTO_TCP or IPPROTO_UDP }
+    SocketType: String;
+    Protocol: String;
+    ISOA2: String;                 { two character country ISO code set from remote IP address and database for GEO blocking - FindISOA2Code }
+    CountryName: String;           { looked up country name from ISOA2 }
+    RegionName: String;            { lookup up sub-region name for country }
+    RemoteRDNS: String;            { reverse DNS lookup for logs }
+    AsnNum: Int64;                 { looked up ASN or ISP/Cloud number, et from remote IP address and database for GEO blocking - FindAsn }
+    AsnName: String;               { ASN company name }
+ end;
+
   {$EXTERNALSYM ipv6_mreq}
   TIPv6MReq = ipv6_mreq;
   PIPv6MReq = PIPV6_MREQ;
@@ -1329,6 +1427,8 @@ const
   {$EXTERNALSYM AI_CANONNAME}
   AI_NUMERICHOST        = $4;   // Nodename must be a numeric address string
   {$EXTERNALSYM AI_NUMERICHOST}
+  BlankSockAddr: TSockAddrIn6 = (sin6_family:  0);      { V9.5 }
+
 
   // Error codes from getaddrinfo().
 
@@ -1394,7 +1494,9 @@ type
   PIN6_ADDR  = ^IN6_ADDR;
   {$EXTERNALSYM PIN6_ADDR}
   TIn6Addr   = IN6_ADDR;
+  {$EXTERNALSYM TIn6Addr}       { V9.4 }
   PIn6Addr   = ^TIn6Addr;
+  {$EXTERNALSYM PIn6Addr}       { V9.4 }
 
 var
   in6addr_any: TIn6Addr;
@@ -1563,7 +1665,7 @@ const
   {$EXTERNALSYM AF_UNSPEC}
   AF_UNIX         = 1;               { local to host (pipes, portals) }
   {$EXTERNALSYM AF_UNIX}
-  AF_INET         = 2;               { internetwork: UDP, TCP, etc. }
+  AF_INET         = 2;               { internetwork: UDP, TCP, etc. - IPv4 }
   {$EXTERNALSYM AF_INET}
   AF_IMPLINK      = 3;               { arpanet imp addresses }
   {$EXTERNALSYM AF_IMPLINK}
@@ -1609,7 +1711,7 @@ const
   {$EXTERNALSYM AF_BAN}
   AF_MAX          = 22;
   {$EXTERNALSYM AF_MAX}
-  AF_INET6        = 23;              { Internetwork Version 6 }
+  AF_INET6        = 23;              { Internetwork Version 6 - IPv6 }
   {$EXTERNALSYM AF_INET6}
 
 const
@@ -1670,9 +1772,6 @@ const
 { * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 { following moved from OverbyteIcsWsocket }
 { * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
-
-type
-    TSocketFamily = (sfAny, sfAnyIPv4, sfAnyIPv6, sfIPv4, sfIPv6);
 
 const
     ICS_LOCAL_HOST_V4  = '127.0.0.1';
@@ -1859,6 +1958,7 @@ type
   PIcsIPv6Address    = ^TIcsIPv6Address;
   TIcsIPv4Address    = LongWord;  // V9.4  {x$IFDEF POSIX} Cardinal {.$ELSE} Integer {.$ENDIF};
   PIcsIPv4Address    = ^TIcsIPv4Address;
+  TTcsIpBytes        = TBytes;        { V9.5 IPv4 or IPv6 bytes, 4 or 16 long }
 
   TSocketState       = (wsInvalidState,
                         wsOpened,     wsBound,
@@ -2065,8 +2165,7 @@ const
 
 { V8.65 some literals for applications }
     SmtpAuthTypeNames: array [TSmtpAuthType] of PChar =
-        ('None','Plain','Login','Cram-Md5','Cram-Sha1','NTLM',
-        'Auto Select','XOAuth2','OAuthBearer');
+                ('None','Plain','Login','Cram-Md5','Cram-Sha1','NTLM','Auto Select','XOAuth2','OAuthBearer');
 
 { * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 { following moved from OverbyteIcsFtpCli }
@@ -2077,7 +2176,7 @@ type
                      sslTypeImplicit);
   TFtpOption      = (ftpAcceptLF, ftpNoAutoResumeAt, ftpWaitUsingSleep,
                      ftpBandwidthControl, ftpAutoDetectCodePage,
-                     ftpFixPasvLanIP); { V2.106 }{ AG V7.02 } { V8.63 FixPasvLan }
+                     ftpFixPasvLanIP, ftpNoExtV4); { V2.106 }{ AG V7.02 } { V8.63 FixPasvLan }  { V9.4 ftpNoExtV4 }
   TFtpOptions     = set of TFtpOption;
   TFtpExtension   = (ftpFeatNone, ftpFeatSize, ftpFeatRest, ftpFeatMDTMYY,
                      ftpFeatMDTM, ftpFeatMLST, ftpFeatMFMT, ftpFeatMD5,
@@ -2087,7 +2186,8 @@ type
                      ftpFeatSiteExec, ftpFeatSiteIndex, ftpFeatSiteZone,    { V2.113 }
                      ftpFeatSiteMsg, ftpFeatSiteCmlsd, ftpFeatSiteDmlsd,    { V2.113 }
                      ftpFeatClnt, ftpFeatComb, ftpFeatUtf8, ftpFeatLang,    { V2.113 }
-                     ftpFeatHost, ftpFeatXCmlsd, ftpFeatXDmlsd);            { V7.01 }
+                     ftpFeatHost, ftpFeatXCmlsd, ftpFeatXDmlsd,             { V7.01 }
+                     ftpFeatEprt, ftpFeatEpsv);                             { V9.4 }
   TFtpExtensions  = set of TFtpExtension; { V2.94 which features server supports }
   TFtpTransMode   = (ftpTransModeStream, ftpTransModeZDeflate) ;  { V2.102 }
   TZStreamState   = (ftpZStateNone, ftpZStateSaveDecom, ftpZStateSaveComp{,
@@ -2155,6 +2255,8 @@ var
     GSSL_BUFFER_SIZE            : Integer = 16384;
  { V8.27 if set before OpenSSL loaded, will use this directory for DLLs, must have trailing \ }
     GSSL_DLL_DIR                : String = '';
+{ V9.5 any OpenSSL loading error messages }
+    GSSL_LOAD_ERRS              : String;
 
  { V8.38 wintrust stuff for authenticode digital signing checking }
     GSSL_SignTest_Check         : Boolean = False;    { check OpenSSL DLLs are digitally signed }
@@ -2219,7 +2321,10 @@ const
     OSSL_VER_3200   = $30200000; // 3.2.0 base                { V8.71 }
     OSSL_VER_3300   = $30300000; // 3.3.0 base                { V9.1 }
     OSSL_VER_3400   = $30400000; // 3.4.0 base                { V9.1 }
+    OSSL_VER_3500   = $30500000; // 3.5.0 base                { V9.5 }
+    OSSL_VER_3600   = $30600000; // 3.6.0 base                { V9.5 }
     OSSL_VER_3LAST  = $3FFFFFFF; // 3 last                    { V8.67 }
+    OSSL_VER_4000   = $40000000; // 4.0.0 base                { V9.5 }
     OSSL_VER_MAX    = $FFFFFFFF; // maximum version           { V8.35 }
 
     { Basically versions listed above are tested if not otherwise commented.  }
@@ -2227,7 +2332,7 @@ const
     { OpenSSL libraries for ICS are available for download here:              }
     { http://wiki.overbyte.be/wiki/index.php/ICS_Download                     }
 
-    MIN_OSSL_VER   = OSSL_VER_3000;   { V9.1 minimum is now 3.0 }
+    MIN_OSSL_VER   = OSSL_VER_3000;     { V9.1 minimum is now 3.0 }
     MAX_OSSL_VER   = OSSL_VER_3LAST;    { V8.67 }
 
 type
@@ -2236,16 +2341,26 @@ type
 
   { V8.57 certificate supplier protocol, determines which functions are used to get certificates }
     TSupplierProto = (SuppProtoNone, SuppProtoOwnCA, SuppProtoAcmeV2,    { V8.62 Acmev1 gone }
-                      SuppProtoCertCentre, SuppProtoServtas);
+                      SuppProtoCertCentre, SuppProtoServtas);            { V9.5 CertCentre gone, Servtas never supported }
+
+ { V9.5 Acme protocol now supported by most certificate providers }
+    TAcmeSupplier = (AcmeLetsEncrypt, AcmeLetsEncryptTest, {AcmeBuypass, AcmeBuypassTest,}  { Bypass not supporting Acme }
+                     AcmeZeroSSL, AcmeGoogle, AcmeGoogleTest, AcmeDigicert, AcmeDigicertTest,
+                     AcmeSslcomRSA, AcmeSslcomECC);
 
  { V8.57 challenge types, differing certificate types support differing challenges,
      some have to be processed manually taking several days. }
     TChallengeType = (ChallNone, ChallFileUNC, ChallFileFtp, ChallFileSrv,
-                      ChallFileApp, ChallDnsAuto, ChallDnsMan, ChallEmail,      { V8.64 DnsMan added }
-                      ChallAlpnUNC, ChallAlpnSrv, ChallAlpnApp, ChallManual);   { V8.62 App added }
+                      ChallFileApp, ChallDnsAuto, ChallDnsAcnt, ChallDnsMan,   { V8.64 DnsMan added, V9.5 ChallDnsAcnt added  }
+                      ChallEmail, ChallAlpnUNC, ChallAlpnSrv, ChallAlpnApp,    { V8.62 App added }
+                      ChallManual);
 
  { V8.71 IcsHosts SSL certificate loading source, file or Windows Store }
     TSslLoadSource = (CertLoadFile, CertWinStoreMachine, CertWinStoreUser);
+
+ { V9.5 TLSEXT_cert_type_xx literals, for SslContext }
+   TTlsCertType = (CertTypeX509, CertTypeRPK);
+   TTlsCertTypes = set of TTlsCertType;
 
 { V8.40 OpenSSL streaming ciphers with various modes }
 { note OpenSSL 3 considers Blowfish, Cast, DES, IDEA, RC2/4/5 and SEED legacy and not supported by default }
@@ -2747,6 +2862,10 @@ const
   ISODateMask = 'yyyy-mm-dd' ;
   ISODateTimeMask = 'yyyy-mm-dd"T"hh:nn:ss' ;
   ISODateLongTimeMask = 'yyyy-mm-dd"T"hh:nn:ss.zzz' ;
+  DateAlphaMask = 'dd-mmm-yyyy' ;                    { V9.4 }
+  SDateMaskPacked = 'yymmddhhnnss' ;                 { V9.4 }
+  DateTimeAlphaMask = 'dd-mmm-yyyy hh:nn:ss' ;       { V9.4 }
+  DateMmmMask = 'dd mmm yyyy' ;                      { V9.4 }
 
   { V8.64 International Domain Name support }
   ACE_PREFIX = 'xn--';

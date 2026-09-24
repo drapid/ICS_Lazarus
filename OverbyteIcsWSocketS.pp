@@ -65,7 +65,9 @@ unit OverbyteIcsWSocketS;
 interface
 
 uses
-  Windows, SysUtils, Classes, WSocket, Winsock;
+  Windows, SysUtils, Classes, Winsock,
+  OverbyteIcsWSocket,
+  OverbyteIcsTypes;
 
 const
     WSocketServerVersion     = 104;

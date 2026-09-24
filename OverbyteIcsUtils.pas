@@ -309,6 +309,12 @@ Oct 13, 2024 V9.4  Finished cleanup of old Base64 functions, by added new IcsBas
                    Added IcsTBytesCompare to compare two TBytes.
 
 
+
+IcsSimpleLogging is a non-buffered log file function which writes text
+to the end of old or new file, opening and closing file for each line,
+ignoring any errors, not designed for continual updating!  The file name
+is in date/time mask format, typically for one log file per day.
+
  * * *  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 unit OverbyteIcsUtils;
 
@@ -350,6 +356,7 @@ uses
 {$IFDEF MSWINDOWS}
     {$IFDEF RTL_NAMESPACES}Winapi.Windows{$ELSE}Windows{$ENDIF},
     OverbyteIcsWinnls,
+    {$IFDEF Rtl_Namespaces}System.Win.Registry{$ELSE}Registry{$ENDIF},   { V9.4 }
 {$ENDIF}
 {$IFDEF POSIX}
     Posix.SysTypes,
@@ -599,6 +606,8 @@ const
     function  RFC3339_StrToDate(aDate: String; UseTZ: Boolean = False): TDateTime; { aka ISO 8601 date } { V8.53, V8.62 UseTZ }
     function  RFC3339_DateToStr(DT: TDateTime; AddTZ: Boolean = False): String;    { aka ISO 8601 date } { V8.53, V8.62 AddTZ }
     function  RFC3339_DateToUtcStr(DT: TDateTime): String;   { aka ISO 8601 date }  { V8.62 }
+    function  IcsDateToAStr(const DateTime: TDateTime): string;                   { V9.4 }
+    function  IcsDateTimeToAStr(const DateTime: TDateTime): string;               { V9.4 }
     function  IcsGetUTCTime: TDateTime;                       { V8.60 }
     function  IcsSetUTCTime (DateTime: TDateTime): boolean ;  { V8.60 }
     function  IcsGetNewTime (DateTime, Difference: TDateTime): TDateTime ; { V8.60 }
@@ -687,6 +696,7 @@ const
     function  IcsBufferToHex(const BufStr: AnsiString): String; overload;    { V8.53 }
     function  IcsTBToHex(const BufTB: TBytes): String; overload;             { V9.1 }
     function  IcsHexToBin(const HexBuf: AnsiString): AnsiString;             { V8.53 }
+    function IcsHexToTB(const HexBuf: AnsiString): TBytes;                   { V9.5 }
     function  IcsFormatHexStr(const HexStr: String; GroupLen: Integer = 8; LineLen: Integer = 64): String;     { V9.1 }
     function  IsXDigit(Ch : WideChar): Boolean; overload;
     function  IsXDigit(Ch : AnsiChar): Boolean; overload;
@@ -843,6 +853,7 @@ const
     function IcsFmtIpv6AddrPort (const Addr, Port: string): string;    { V8.52 }
     function IcsStripIpv6Addr (const Addr: string): string;            { V8.52 }
     function IntToKbyte (Value: Int64; Bytes: boolean = false): String; { V8.54  moved here from OverbyteIcsFtpSrvT }
+    function IcsIntToKbyte (Value: Int64; Bytes: boolean = false): String; { V9.5 better name for IntToKbyte }
     function IcsWireFmtToStrList(const Buffer: TBytes; Len: Integer; SList: TStrings): Integer;  { V8.57, V8.64 }
     function IcsWireFmtToCSV(const Buffer: TBytes; Len: Integer): String;   { V8.64 }
     function IcsStrListToWireFmt(SList: TStrings; var Buffer: TBytes): Integer;            { V8.57 }
@@ -1391,7 +1402,8 @@ type
                                                       var index: Integer): Boolean; virtual;     { V8.65 }
   end;
 
-  function CompareGTMem (P1, P2: Pointer; Length: Integer): Integer ;
+  function IcsCompareGTMem (P1, P2: Pointer; Length: Integer): Integer ;    { V9.5 added Ics }
+  function IcsCompareTBytes(const T1, T2: TBytes): Integer; // 0=equal, >=1 T1 more than T2, <=-1 T1 less than T2  { V9.5 }
 
 { V8.67 TIcsStringBuild Class moved from OverbyteIcsBlacklist }
 type
@@ -1422,6 +1434,7 @@ type
     property CharSize: integer       read  FCharSize
                                      write FCharSize;    { V8.67 }
   end;
+
 
 { V8.67 moved from OverbyteIcsMimeUtils to ease circular references,
   less CLR versions }
@@ -1994,6 +2007,7 @@ end;
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 { V8.53 RFC3339 string date to TDateTime, aka ISO 8601 date }
+{ note ISO 8601 requires T for time separator, RFC3339 allows space instead }
 { V8.62 optionally process time zone and convert to local time }
 {  yyyy-mm-ddThh:nn:ssZ (ISODateTimeMask), might be NULL
    yyyy-mm-ddThh:nn:ss.sss (milliseconds on end
@@ -2052,7 +2066,7 @@ begin
 { V8.62 check for time zone, Z, GMT, +07:00, +0200, -1000, -03:30 }
     if Length(aDate) < (tzoffset + 2) then Exit ;  // no time zone
     sign := aDate [tzoffset];
-    if (sign = '-') or (sign = '+') then begin // ignore Z
+    if (sign = '-') or (sign = '+') then begin // ignore Z which means +0000
         tzvalue := StrToIntDef(copy (aDate, tzoffset + 1, 2), 0) * 60;
         if Length(aDate) > (tzoffset + 4) then begin
             if (aDate [tzoffset + 3] = '3') or (aDate [tzoffset + 4] = '3') then
@@ -2063,7 +2077,7 @@ begin
         else
             Result := Result - (tzvalue / MinutesPerDay);
     end;
-    Result := Result - (IcsGetLocalTimeZoneBias / MinutesPerDay);
+    Result := Result - (IcsGetLocalTimeZoneBias / MinutesPerDay);  // correct for summer time
 end ;
 
 
@@ -2091,6 +2105,22 @@ function RFC3339_DateToUtcStr(DT: TDateTime): String;
 begin
     Result := RFC3339_DateToStr(IcsDateTimeToUTC(DT), False);
 end ;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+{ V9.4 TDateTimne to string with short alphabetic month and time, ie 01-Jan-2025 14:15:16, mainly for logging  }
+function IcsDateTimeToAStr(const DateTime: TDateTime): string;
+begin
+  DateTimeToString(Result, DateTimeAlphaMask, DateTime);
+end;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+{ V9.4 TDateTimne to string with short alphabetic month, ie 01-Jan-2025, mainly for logging  }
+function IcsDateToAStr(const DateTime: TDateTime): string;
+begin
+  DateTimeToString(Result, DateAlphaMask, DateTime);
+end;
 
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
@@ -4142,6 +4172,31 @@ begin
 end;
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+function IcsHexToTB(const HexBuf: AnsiString): TBytes;             { V9.5 }
+var
+    Source: PAnsiChar;
+    I, binlen, hexlen: integer;
+begin
+    hexlen := Length(hexBuf);
+    SetLength(Result, hexlen);
+    binlen := 0;
+    I := 1;
+    Source := Pointer (HexBuf) ;
+    while (I < hexlen) do begin
+        Result[binlen] := htoin(Source, 2);
+        I := I + 2;
+        Inc (Source, 2);
+        binlen := binlen + 1;
+        if HexBuf[I] = ':'  then begin   { skip colon separators }
+            I := I + 1;
+            Inc (Source, 1);
+        end;
+    end;
+    SetLength(Result, binlen);
+end;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 { break long hex string (or anything really) into groups and lines, 0=none }
 function IcsFormatHexStr(const HexStr: String; GroupLen: Integer = 8; LineLen: Integer = 64): String;     { V9.1 }
 var
@@ -5979,9 +6034,10 @@ begin
     SResult := {$IFDEF RTL_NAMESPACES}System.{$ENDIF}SysUtils.FindFirst(LongFile, faAnyFile, SearchRec);
     if SResult = 0 then begin
      {$IFDEF MSWINDOWS}
+        TempSize.QuadPart := 0;  { V9.5 }
         TempSize.LowPart  := SearchRec.FindData.nFileSizeLow ;
         TempSize.HighPart := SearchRec.FindData.nFileSizeHigh ;
-        FSize             := TempSize.QuadPart ;
+        FSize             := Int64(TempSize.QuadPart);  { V9.5 unsigned to signed cast }
         FileUDT := FileTimeToDateTime (SearchRec.FindData.ftLastWriteTime);
       {$ENDIF}
       {$IFDEF POSIX}
@@ -6882,6 +6938,11 @@ begin
         Result := Result + suffix;
 end ;
 
+function IcsIntToKbyte (Value: Int64; Bytes: boolean = false): String;  { V9.5 better name }
+begin
+    Result := IntToKbyte (Value, Bytes);
+end;
+
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 { helper functions for timers and triggers using GetTickCount - which wraps after 49 days }
@@ -7353,10 +7414,41 @@ end;
 
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
+{ V9.5 compare two binary TByes, used by sorting functions }
+function IcsCompareTBytes(const T1, T2: TBytes): Integer; // 0=equal, >=1 T1 more than T2, <=-1 T1 less than T2  { V9.5 }
+var
+    Len1, Len2, Last, Idx: Integer;
+begin
+    Len1 := Length(T1);
+    Len2 := Length(T2);
+    if (Len1 = Len2) then begin
+        if (Len1 = 0) or CompareMem(@T1[0], @T2[0], Len1) then begin
+            Result := 0;   // compared same
+            Exit;
+        end;
+    end;
+    Result := Len1 - Len2;
+    if (Len1 > 0) and (Len2 > 0) then begin
+        if (Result < 0) then
+            Last := Len1
+        else
+            Last := Len2;
+        Idx := 0;
+        while (Idx < Last) do begin
+            if T1[Idx] <> T2[Idx] then begin  // exit at first mismatch
+                Result := T1[Idx] - T2[Idx];
+                Exit;
+            end;
+            Idx := Idx + 1;
+        end;
+    end;
+end;
+
+
+{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 { V8.60 compare two memory buffers, used for sorting.
  ideally ASM SysUtils.CompareMem should be modified to return less or greater }
-
-function CompareGTMem (P1, P2: Pointer; Length: Integer): Integer;
+function IcsCompareGTMem (P1, P2: Pointer; Length: Integer): Integer;       { V9.5 added Ics }
 var
     I: Integer;
     PC1, PC2: PAnsiChar;
@@ -8260,78 +8352,13 @@ begin
 {$ENDIF MSWINDOWS}
 end;
 
-{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
-(*
-function Base64Encode(const Input : PAnsiChar; Len: Integer) : AnsiString;
-var
-    Count : Integer;
-    I     : Integer;
-begin
-    Count := 0;
-    I := Len;
-    while (I mod 3) > 0 do
-        Inc(I);
-    I := (I div 3) * 4;
-    SetLength(Result, I);
-    I := 0;
-    while Count < Len do begin
-        Inc(I);
-        Result[I] := Base64OutA[(Byte(Input[Count]) and $FC) shr 2];
-        if (Count + 1) < Len then begin
-            Inc(I);
-            Result[I] := Base64OutA[((Byte(Input[Count]) and $03) shl 4) +
-                                    ((Byte(Input[Count + 1]) and $F0) shr 4)];
-            if (Count + 2) < Len then begin
-                Inc(I);
-                Result[I] := Base64OutA[((Byte(Input[Count + 1]) and $0F) shl 2) +
-                                       ((Byte(Input[Count + 2]) and $C0) shr 6)];
-                Inc(I);
-                Result[I] := Base64OutA[(Byte(Input[Count + 2]) and $3F)];
-            end
-            else begin
-                Inc(I);
-                Result[I] := Base64OutA[(Byte(Input[Count + 1]) and $0F) shl 2];
-                Inc(I);
-                Result[I] := '=';
-            end
-        end
-        else begin
-            Inc(I);
-            Result[I] := Base64OutA[(Byte(Input[Count]) and $03) shl 4];
-            Inc(I);
-            Result[I] := '=';
-            Inc(I);
-            Result[I] := '=';
-        end;
-        Inc(Count, 3);
-    end;
-end;
-
-{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
-function Base64EncodeA(const Input : AnsiString) : AnsiString;            {V9.1 to avoid overload confusion }
-begin
-    Result := Base64Encode(PAnsiChar(Input), Length(Input));
-end;
-
-
-{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
-function Base64Encode(const Input : AnsiString) : AnsiString;
-begin
-    Result := Base64Encode(PAnsiChar(Input), Length(Input));
-end;
-
-{* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
-function Base64EncodeTB(Input: TBytes) : String;                         { V9.1 }
-begin
-    Result := Base64Encode(PAnsiChar(Input), Length(Input));
-end;
-*)
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 { V9.4 Base 64 encoding, old versions working with AnsiChars, ICS does not used any of these
   but retained as deprecated for user applications, please update to the IcsBase versions }
 function  Base64Encode(const Input : AnsiString) : AnsiString; overload; deprecated;
 begin
+    Result := AnsiString(IcsBase64Encode(String(Input)));
 end;
 
 function  Base64Encode(const Input : PAnsiChar; Len : Integer) : AnsiString; overload; deprecated;
@@ -8398,6 +8425,10 @@ var
 begin
     Count := 0;  // TBytes input  is base0
     Len := Length(Input);
+    if Len = 0 then begin    { V9.5 }
+        SetLength(Result, 0);
+        Exit;
+    end;
     I := Len;
     while (I mod 3) > 0 do
         Inc(I);
@@ -8924,11 +8955,18 @@ end;
 function IcsBuiltWith: String;
 begin
     Result := '?';
-{$IFDEF COMPILER29_UP}
+{$IFDEF VER380}
+    Result := '14.0';        { V9.5 future }
+{$ENDIF}
+{$IFDEF Ver370}
+    Result := '13.0'         { V9.5 }
+    {$IF Declared(RTLVersion131)}Result := '13.1';{$IFEND}    // guessing
+{$ENDIF}
+{$IFDEF VER360}
     Result := '12.0';
     {$IF Declared(RTLVersion121)}Result := '12.1';{$IFEND}
-    {$IF Declared(RTLVersion122)}Result := '12.2';{$IFEND}   // V9.3 }
-    {$IF Declared(RTLVersion123)}Result := '12.3';{$IFEND}   // guessing
+    {$IF Declared(RTLVersion122)}Result := '12.2';{$IFEND}   // V9.3
+    {$IF Declared(RTLVersion123)}Result := '12.3';{$IFEND}   // V9.4
 {$ENDIF}
 {$IFDEF VER350}
     Result := '11.0';
@@ -8971,6 +9009,7 @@ begin
 {$IFDEF VER80}Result := '1';{$ENDIF}
 {$IFDEF LCL}Result := 'Lazarus ' + lcl_version;{$ENDIF}
 end;
+
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
 { V8.70 returns an extended compiler version number or name and platform  }
@@ -9369,7 +9408,7 @@ end;
 { V9.3 moved various IPv4/6 conversion functions here from OverbyteIcsWSocket }
 
 {* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *}
-{ Check for a valid numeric dotted IP address such as 192.161.65.25         }
+{ Check for a valid numeric dotted IPv4 address such as 192.161.65.25         }
 { Accept leading and trailing spaces.                                       }
 { Note. full numeric IP not supported. ie 3650250390                        }
 function WSocketIsDottedIP(const S : AnsiString) : Boolean;
